@@ -40,7 +40,7 @@ const data = {
         { title: "Customer List", url: "/customers", icon: Users },
         { title: "Campaigns", url: "/campaigns", icon: Megaphone },
         { title: "Analytics", url: "#", icon: BarChart3 },
-        { title: "Recordings", url: "#", icon: Mic },
+        { title: "Recordings", url: "/recordings", icon: Mic },
       ],
     },
     {
