@@ -1,6 +1,7 @@
 "use client";
+import toast from "react-hot-toast";
 
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import {
   ChevronDown,
   Upload,
@@ -46,6 +47,7 @@ import {
 } from "@/components/ui/select";
 
 interface UploadedFile {
+    id?: string;     
   name: string;
   size: number;
   file: File;
@@ -123,6 +125,26 @@ export interface AgentFormInitialData {
   callScript?: string;
   serviceDescription?: string;
 }
+export interface Language {
+  id: string;
+  name: string;
+}
+
+export interface Voice {
+  id: string;
+  name: string;
+  tag: string;
+}
+
+export interface Prompt {
+  id: string;
+  name: string;
+}
+
+export interface Model {
+  id: string;
+  name: string;
+}
 
 interface AgentFormProps {
   mode: "create" | "edit";
@@ -133,6 +155,7 @@ export function AgentForm({ mode, initialData }: AgentFormProps) {
   // Form state — initialized from initialData when provided
   const [agentName, setAgentName] = useState(initialData?.agentName ?? "");
   const [callType, setCallType] = useState(initialData?.callType ?? "");
+  const [agentId, setAgentId] = useState<string | null>(null);
   const [language, setLanguage] = useState(initialData?.language ?? "");
   const [voice, setVoice] = useState(initialData?.voice ?? "");
   const [prompt, setPrompt] = useState(initialData?.prompt ?? "");
@@ -140,12 +163,210 @@ export function AgentForm({ mode, initialData }: AgentFormProps) {
   const [latency, setLatency] = useState([initialData?.latency ?? 0.5]);
   const [speed, setSpeed] = useState([initialData?.speed ?? 110]);
   const [description, setDescription] = useState(initialData?.description ?? "");
-
+// Dropdown data from API
+const [languagesOptions, setLanguagesOptions] = useState<Language[]>([]);
+const [voicesOptions, setVoicesOptions] = useState<Voice[]>([]);
+const [promptsOptions, setPromptsOptions] = useState<Prompt[]>([]);
+const [modelsOptions, setModelsOptions] = useState<Model[]>([]);
+const [isDirty, setIsDirty] = useState(false);
+  const baseUrl = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:3001/api";
+const [loadingLanguages, setLoadingLanguages] = useState(true);
+const [loadingVoices, setLoadingVoices] = useState(true);
+const [loadingPrompts, setLoadingPrompts] = useState(true);
+const [loadingModels, setLoadingModels] = useState(true);
+  
   // Call Script
   const [callScript, setCallScript] = useState(initialData?.callScript ?? "");
 
   // Service/Product Description
   const [serviceDescription, setServiceDescription] = useState(initialData?.serviceDescription ?? "");
+
+
+     useEffect(() => {
+  setLoadingLanguages(true);
+  fetch(`${baseUrl}/languages`)
+    .then(res => res.json())
+    .then(data => setLanguagesOptions(data))
+    .catch(() => toast.error("Failed to load languages"))
+    .finally(() => setLoadingLanguages(false));
+
+  setLoadingVoices(true);
+  fetch(`${baseUrl}/voices`)
+    .then(res => res.json())
+    .then(data => setVoicesOptions(data))
+    .catch(() => toast.error("Failed to load voices"))
+    .finally(() => setLoadingVoices(false));
+
+  setLoadingPrompts(true);
+  fetch(`${baseUrl}/prompts`)
+    .then(res => res.json())
+    .then(data => setPromptsOptions(data))
+    .catch(() => toast.error("Failed to load prompts"))
+    .finally(() => setLoadingPrompts(false));
+
+  setLoadingModels(true);
+  fetch(`${baseUrl}/models`)
+    .then(res => res.json())
+    .then(data => setModelsOptions(data))
+    .catch(() => toast.error("Failed to load models"))
+    .finally(() => setLoadingModels(false));
+}, []);
+const handleFiles = useCallback(async (files: FileList | null) => {
+  if (!files) return;
+
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i];
+    const ext = "." + file.name.split(".").pop()?.toLowerCase();
+    if (!ACCEPTED_TYPES.includes(ext)) {
+      toast.error(`File type not allowed: ${file.name}`);
+      continue;
+    }
+
+    try {
+      // Step 1: get signed URL
+      const resUrl = await fetch(`${baseUrl}/attachments/upload-url`, { method: "POST" });
+      if (!resUrl.ok) throw new Error("Failed to get signed URL");
+      const { signedUrl, key } = await resUrl.json();
+
+      // Step 2: upload file
+      const uploadRes = await fetch(signedUrl, {
+        method: "PUT",
+        body: file,
+        headers: { "Content-Type": "application/octet-stream" },
+      });
+      if (!uploadRes.ok) throw new Error("File upload failed");
+
+      // Step 3: register attachment
+      const resRegister = await fetch(`${baseUrl}/attachments`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ key, fileName: file.name, fileSize: file.size, mimeType: file.type }),
+      });
+      if (!resRegister.ok) throw new Error("Failed to register attachment");
+      const data = await resRegister.json();
+
+      // Step 4: store in state
+      setUploadedFiles(prev => [...prev, { name: file.name, size: file.size, file, id: data.id }]);
+
+      toast.success(`Uploaded: ${file.name}`);
+    } catch (error) {
+      console.error("File upload failed", error);
+      toast.error(`Failed to upload file: ${file.name}`);
+    }
+  }
+}, [baseUrl]);
+
+
+
+///Handle save  agent ////
+const validateForm = () => {
+  const errors: string[] = [];
+  if (!agentName) errors.push("Agent name is required");
+  if (!callType) errors.push("Call type is required");
+  if (!language) errors.push("Language is required");
+  if (!voice) errors.push("Voice is required");
+  if (!prompt) errors.push("Prompt is required");
+  if (!model) errors.push("Model is required");
+
+  if (errors.length) {
+    errors.forEach(err => toast.error(err));
+    return false;
+  }
+  return true;
+};
+
+const handleSaveWithValidation  = async () => {
+  if (!validateForm()) return;
+
+  const agentData = {
+    name: agentName,
+    description,
+    callType,
+    language,
+    voice,
+    prompt,
+    model,
+    latency: latency[0],
+    speed: speed[0],
+    callScript,
+    serviceDescription,
+    attachments: uploadedFiles.map(f => f.id),
+    tools: {
+      allowHangUp: false,
+      allowCallback: false,
+      liveTransfer: false,
+    },
+  };
+
+  try {
+    // استخدم POST لو مفيش agentId و PUT لو موجود
+    const method = agentId ? "PUT" : "POST";
+    const url = agentId ? `${baseUrl}/agents/${agentId}` : `${baseUrl}/agents`;
+
+    const res = await fetch(url, {
+      method,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(agentData),
+    });
+
+    if (!res.ok) throw new Error("Failed to save agent");
+
+    const data = await res.json();
+    console.log("Agent saved:", data);
+
+    // خزّن الـ agentId لو كان POST جديد
+    if (!agentId && data?.id) setAgentId(data.id);
+
+    toast.success("Agent saved successfully!");
+    return data; // مهم عشان Test Call يستخدم الـ agentId
+  } catch (error) {
+    console.error("Error saving agent:", error);
+    toast.error("Error saving agent. Check console for details.");
+  }
+};
+
+
+// Track changes in form fields
+useEffect(() => {
+  const initial = {
+    agentName: initialData?.agentName ?? "",
+    description: initialData?.description ?? "",
+    callType: initialData?.callType ?? "",
+    language: initialData?.language ?? "",
+    voice: initialData?.voice ?? "",
+    prompt: initialData?.prompt ?? "",
+    model: initialData?.model ?? "",
+    latency: initialData?.latency ?? 0.5,
+    speed: initialData?.speed ?? 110,
+    callScript: initialData?.callScript ?? "",
+    serviceDescription: initialData?.serviceDescription ?? "",
+  };
+
+  const current = { agentName, description, callType, language, voice, prompt, model, latency: latency[0], speed: speed[0], callScript, serviceDescription };
+
+  const changed = Object.keys(initial).some(key => initial[key as keyof typeof initial] !== current[key as keyof typeof current]);
+  setIsDirty(changed);
+}, [agentName, description, callType, language, voice, prompt, model, latency, speed, callScript, serviceDescription]);
+
+
+// Warn user on page unload
+useEffect(() => {
+  const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+    if (isDirty) {
+      e.preventDefault();
+      e.returnValue = "You have unsaved changes. Are you sure you want to leave?";
+    }
+  };
+  window.addEventListener("beforeunload", handleBeforeUnload);
+  return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+}, [isDirty]);
+
+
+
+
+
+
+
 
   // Reference Data
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
@@ -158,6 +379,8 @@ export function AgentForm({ mode, initialData }: AgentFormProps) {
   const [testGender, setTestGender] = useState("");
   const [testPhone, setTestPhone] = useState("");
 
+
+  
   // Badge counts for required fields
   const basicSettingsMissing = [agentName, callType, language, voice, prompt, model].filter(
     (v) => !v
@@ -174,22 +397,7 @@ export function AgentForm({ mode, initialData }: AgentFormProps) {
     ".xls",
   ];
 
-  const handleFiles = useCallback(
-    (files: FileList | null) => {
-      if (!files) return;
-      const newFiles: UploadedFile[] = [];
-      for (let i = 0; i < files.length; i++) {
-        const file = files[i];
-        const ext = "." + file.name.split(".").pop()?.toLowerCase();
-        if (ACCEPTED_TYPES.includes(ext)) {
-          newFiles.push({ name: file.name, size: file.size, file });
-        }
-      }
-      setUploadedFiles((prev) => [...prev, ...newFiles]);
-    },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    []
-  );
+
 
   const removeFile = (index: number) => {
     setUploadedFiles((prev) => prev.filter((_, i) => i !== index));
@@ -200,16 +408,85 @@ export function AgentForm({ mode, initialData }: AgentFormProps) {
     setIsDragging(true);
   };
 
-  const handleDragLeave = (e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragging(false);
+const handleDragLeave = (e: React.DragEvent) => {
+  e.preventDefault();
+  setIsDragging(false);
+  toast.dismiss(); // لو في toast للـ drag ممكن نغلقه
+};
+
+const handleDrop = (e: React.DragEvent) => {
+  e.preventDefault();
+  setIsDragging(false);
+
+  const files = e.dataTransfer.files;
+  if (!files || files.length === 0) return;
+
+  toast.loading(`${files.length} file(s) processing...`);
+  handleFiles(files)
+    .then(() => toast.success("Files uploaded successfully!"))
+    .catch(() => toast.error("Some files failed to upload."));
+};
+
+const handleTestCall = async () => {
+  const baseUrl = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:3001/api";
+
+  // Validation: تأكد من تعبئة بيانات الـ Test Call
+  if (!testFirstName || !testLastName || !testPhone) {
+    toast.error("Please fill in First Name, Last Name, and Phone Number before testing.");
+    return;
+  }
+
+  // Use current agentId or save first if not available
+  let currentAgentId = agentId;
+  if (!currentAgentId) {
+    const savedAgent = await handleSaveWithValidation();
+    if (!savedAgent?.id) {
+      toast.error("Cannot start test call without saving the agent first.");
+      return;
+    }
+    currentAgentId = savedAgent.id;
+    setAgentId(currentAgentId);
+  }
+
+  // Prepare test call data
+  const testData = {
+    firstName: testFirstName,
+    lastName: testLastName,
+    gender: testGender,
+    phoneNumber: testPhone,
   };
 
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragging(false);
-    handleFiles(e.dataTransfer.files);
-  };
+  // Show loading toast
+  const loadingToast = toast.loading("Starting test call...");
+
+  try {
+    const res = await fetch(`${baseUrl}/agents/${currentAgentId}/test-call`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(testData),
+    });
+
+    if (!res.ok) {
+      const errorText = await res.text();
+      throw new Error(errorText || "Test call failed");
+    }
+
+    const data = await res.json();
+    console.log("Test Call Response:", data);
+
+    // Success toast
+    toast.dismiss(loadingToast);
+    toast.success("Test Call Started!");
+  } catch (error) {
+    console.error("Test Call Failed:", error);
+    toast.dismiss(loadingToast);
+    toast.error("Test Call Failed! Check console for details.");
+  }
+};
+
+
+
+
 
   const heading = mode === "create" ? "Create Agent" : "Edit Agent";
   const saveLabel = mode === "create" ? "Save Agent" : "Save Changes";
@@ -218,7 +495,7 @@ export function AgentForm({ mode, initialData }: AgentFormProps) {
     <div className="flex flex-1 flex-col gap-6 p-6">
       <div className="flex items-center justify-between">
         <h1 className="text-3xl font-bold">{heading}</h1>
-        <Button>{saveLabel}</Button>
+<Button onClick={handleSaveWithValidation }>{saveLabel}</Button>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -269,74 +546,94 @@ export function AgentForm({ mode, initialData }: AgentFormProps) {
                 </Select>
               </div>
 
-              <div className="space-y-2">
-                <Label>
-                  Language <span className="text-destructive">*</span>
-                </Label>
-                <Select value={language} onValueChange={setLanguage}>
-                  <SelectTrigger className="w-full">
-                    <SelectValue placeholder="Select language" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="en">English</SelectItem>
-                    <SelectItem value="ar">Arabic</SelectItem>
-                    <SelectItem value="fr">French</SelectItem>
-                    <SelectItem value="es">Spanish</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
+             {/* Language Dropdown */}
+<div className="space-y-2">
+  <Label>
+    Language <span className="text-destructive">*</span>
+  </Label>
+  <Select value={language} onValueChange={setLanguage}>
+    <SelectTrigger className="w-full">
+      <SelectValue placeholder="Select language" />
+    </SelectTrigger>
+    <SelectContent>
+      {loadingLanguages ? (
+        <SelectItem value="loading" disabled>Loading...</SelectItem>
+      ) : languagesOptions.map(lang => (
+        <SelectItem key={lang.id} value={lang.id}>
+          {lang.name}
+        </SelectItem>
+      ))}
+    </SelectContent>
+  </Select>
+</div>
 
-              <div className="space-y-2">
-                <Label>
-                  Voice <span className="text-destructive">*</span>
-                </Label>
-                <Select value={voice} onValueChange={setVoice}>
-                  <SelectTrigger className="w-full">
-                    <SelectValue placeholder="Select voice" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="alloy">Alloy</SelectItem>
-                    <SelectItem value="echo">Echo</SelectItem>
-                    <SelectItem value="fable">Fable</SelectItem>
-                    <SelectItem value="onyx">Onyx</SelectItem>
-                    <SelectItem value="nova">Nova</SelectItem>
-                    <SelectItem value="shimmer">Shimmer</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
+{/* Voice Dropdown */}
+<div className="space-y-2">
+  <Label>
+    Voice <span className="text-destructive">*</span>
+  </Label>
+  <Select value={voice} onValueChange={setVoice}>
+    <SelectTrigger className="w-full">
+      <SelectValue placeholder="Select voice" />
+    </SelectTrigger>
+    <SelectContent>
+      {loadingVoices ? (
+        <SelectItem value="loading" disabled>Loading...</SelectItem>
+      ) : voicesOptions.map(v => (
+        <SelectItem key={v.id} value={v.id}>
+          <div className="flex justify-between items-center">
+            <span>{v.name}</span>
+            <Badge variant="secondary">{v.tag}</Badge>
+          </div>
+        </SelectItem>
+      ))}
+    </SelectContent>
+  </Select>
+</div>
 
-              <div className="space-y-2">
-                <Label>
-                  Prompt <span className="text-destructive">*</span>
-                </Label>
-                <Select value={prompt} onValueChange={setPrompt}>
-                  <SelectTrigger className="w-full">
-                    <SelectValue placeholder="Select prompt" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="default">Default Prompt</SelectItem>
-                    <SelectItem value="sales">Sales Prompt</SelectItem>
-                    <SelectItem value="support">Support Prompt</SelectItem>
-                    <SelectItem value="custom">Custom Prompt</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
+           
+{/* Prompt Dropdown */}
+<div className="space-y-2">
+  <Label>
+    Prompt <span className="text-destructive">*</span>
+  </Label>
+  <Select value={prompt} onValueChange={setPrompt}>
+    <SelectTrigger className="w-full">
+      <SelectValue placeholder="Select prompt" />
+    </SelectTrigger>
+    <SelectContent>
+      {loadingPrompts ? (
+        <SelectItem value="loading" disabled>Loading...</SelectItem>
+      ) : promptsOptions.map(p => (
+        <SelectItem key={p.id} value={p.id}>
+          {p.name}
+        </SelectItem>
+      ))}
+    </SelectContent>
+  </Select>
+</div>
 
-              <div className="space-y-2">
-                <Label>
-                  Model <span className="text-destructive">*</span>
-                </Label>
-                <Select value={model} onValueChange={setModel}>
-                  <SelectTrigger className="w-full">
-                    <SelectValue placeholder="Select model" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="pro">Pro</SelectItem>
-                    <SelectItem value="standard">Standard</SelectItem>
-                    <SelectItem value="flex">Flex</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
+
+          {/* Model Dropdown */}
+<div className="space-y-2">
+  <Label>
+    Model <span className="text-destructive">*</span>
+  </Label>
+  <Select value={model} onValueChange={setModel}>
+    <SelectTrigger className="w-full">
+      <SelectValue placeholder="Select model" />
+    </SelectTrigger>
+    <SelectContent>
+      {loadingModels ? (
+        <SelectItem value="loading" disabled>Loading...</SelectItem>
+      ) : modelsOptions.map(m => (
+        <SelectItem key={m.id} value={m.id}>
+          {m.name}
+        </SelectItem>
+      ))}
+    </SelectContent>
+  </Select>
+</div>
 
               <div className="md:col-span-2 grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="space-y-2">
@@ -593,10 +890,11 @@ export function AgentForm({ mode, initialData }: AgentFormProps) {
                     />
                   </div>
 
-                  <Button className="w-full">
-                    <Phone className="mr-2 h-4 w-4" />
-                    Start Test Call
-                  </Button>
+                <Button className="w-full" onClick={handleTestCall}>
+  <Phone className="mr-2 h-4 w-4" />
+  Start Test Call
+</Button>
+
                 </div>
               </CardContent>
             </Card>
@@ -607,7 +905,7 @@ export function AgentForm({ mode, initialData }: AgentFormProps) {
       {/* Sticky bottom save bar */}
       <div className="sticky bottom-0 -mx-6 -mb-6 border-t bg-background px-6 py-4">
         <div className="flex justify-end">
-          <Button>{saveLabel}</Button>
+<Button onClick={handleSaveWithValidation }>{saveLabel}</Button>
         </div>
       </div>
     </div>
